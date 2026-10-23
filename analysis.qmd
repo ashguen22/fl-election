@@ -14,22 +14,45 @@ library(scales)
 # Read all 67 county tab-separated files (which have no header row)
 files <- list.files("data", pattern = "\\.txt$", full.names = TRUE)
 
-gov_rep <- read_tsv(
+raw_gov_rep <- read_tsv(
   files,
   col_names = FALSE,
   quote = "",
-  col_select = c(office = X12, candidate = X15, party = X16, votes = X19),
+  col_select = c(county = X2, office = X12, candidate = X15, party = X16, votes = X19),
   show_col_types = FALSE
 ) |>
   # Keep only Republican candidates in the Governor primary
   filter(office == "Governor", party == "REP") |>
-  # Sum total votes across all precincts and counties for each candidate
-  summarize(total_votes = sum(as.numeric(votes), na.rm = TRUE), .by = candidate)
+  mutate(votes = as.numeric(votes))
 
-# Plot candidate vote totals ordered from highest to lowest
+# Sum total votes across all counties for each candidate
+gov_rep <- raw_gov_rep |>
+  summarize(total_votes = sum(votes, na.rm = TRUE), .by = candidate) |>
+  mutate(pct = total_votes / sum(total_votes))
+
+# Plot candidate vote totals with value annotations
 ggplot(gov_rep, aes(x = total_votes, y = fct_reorder(candidate, total_votes))) +
   geom_col(fill = "firebrick") +
-  scale_x_continuous(labels = label_comma()) +
+  # Add vote total and percentage labels to the right of each bar
+  geom_text(
+    aes(label = paste0(comma(total_votes), " (", percent(pct, accuracy = 0.1), ")")),
+    hjust = -0.05,
+    size = 3.3
+  ) +
+  # Call out the primary winner's margin
+  annotate(
+    "text",
+    x = 580000,
+    y = 4,
+    label = "Byron Donalds won 50 of 67 counties,\nnearly doubling runner-up Jay Collins",
+    color = "firebrick4",
+    fontface = "italic",
+    size = 3.5
+  ) +
+  scale_x_continuous(
+    labels = label_comma(),
+    expand = expansion(mult = c(0, 0.25))
+  ) +
   labs(
     title = "2026 Florida Republican Primary for Governor",
     subtitle = "Official precinct-level vote totals across all 67 counties",
@@ -38,4 +61,45 @@ ggplot(gov_rep, aes(x = total_votes, y = fct_reorder(candidate, total_votes))) +
     caption = "Source: Florida Department of State"
   ) +
   theme_minimal()
+```
+
+## County Heat Map
+
+```{r}
+# Calculate Byron Donalds's vote share in each county and match map_data names
+county_shares <- raw_gov_rep |>
+  summarize(votes = sum(votes, na.rm = TRUE), .by = c(county, candidate)) |>
+  mutate(vote_share = votes / sum(votes), .by = county) |>
+  filter(candidate == "Byron Donalds") |>
+  mutate(
+    subregion = tolower(county),
+    subregion = case_match(
+      subregion,
+      "desoto" ~ "de soto",
+      "st. johns" ~ "st johns",
+      "st. lucie" ~ "st lucie",
+      .default = subregion
+    )
+  )
+
+# Join county election results with Florida county polygon coordinates
+fl_map <- map_data("county", "florida") |>
+  left_join(county_shares, by = "subregion")
+
+# Plot a county heat map of vote share
+ggplot(fl_map, aes(x = long, y = lat, group = group, fill = vote_share)) +
+  geom_polygon(color = "white", linewidth = 0.2) +
+  coord_quickmap() +
+  scale_fill_distiller(
+    palette = "Reds",
+    direction = 1,
+    labels = label_percent(accuracy = 1),
+    name = "Donalds\nVote Share"
+  ) +
+  labs(
+    title = "Republican Primary Vote Share by County (2026)",
+    subtitle = "Share of Republican gubernatorial primary votes cast for winner Byron Donalds",
+    caption = "Source: Florida Department of State"
+  ) +
+  theme_void()
 ```
